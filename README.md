@@ -48,6 +48,11 @@ You can also request any page as Markdown with the `Accept: text/markdown` heade
 3. Configure at **Settings > Marklink**
 4. Flush permalinks if needed (step 5 above)
 
+## Plugin Check
+Has been tested by WordPress Plugin Check Plugin.
+
+<img src="./plugin-check.png"/>
+
 ## Usage
 
 ```bash
