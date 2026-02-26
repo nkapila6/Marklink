@@ -54,17 +54,12 @@ class Marklink {
     }
 
     private function __construct() {
-        add_action('plugins_loaded', array($this, 'load_textdomain'));
         add_action('init', array($this, 'init'));
         add_action('admin_menu', array($this, 'add_settings_page'));
         add_action('admin_init', array($this, 'register_settings'));
         add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_settings_link'));
         register_activation_hook(__FILE__, array($this, 'activate'));
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
-    }
-
-    public function load_textdomain() {
-        load_plugin_textdomain('marklink', false, dirname(plugin_basename(__FILE__)) . '/languages');
     }
 
     public function activate() {
@@ -81,10 +76,10 @@ class Marklink {
      * stripping query strings and the WordPress subdirectory prefix.
      */
     private function get_request_path() {
-        $uri  = wp_unslash($_SERVER['REQUEST_URI']);
-        $path = parse_url($uri, PHP_URL_PATH);
+        $uri  = isset($_SERVER['REQUEST_URI']) ? esc_url_raw(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        $path = wp_parse_url($uri, PHP_URL_PATH);
 
-        $home_path = trim(parse_url(home_url(), PHP_URL_PATH) ?: '', '/');
+        $home_path = trim(wp_parse_url(home_url(), PHP_URL_PATH) ?: '', '/');
         if ($home_path !== '') {
             $path = preg_replace('#^/' . preg_quote($home_path, '#') . '#', '', $path);
         }
@@ -325,12 +320,12 @@ class Marklink {
 
         header('Content-Type: text/plain; charset=UTF-8');
 
-        echo '# ' . get_bloginfo('name') . ($is_full ? ' (Full Archive)' : '') . "\n";
-        echo '> ' . get_bloginfo('description') . "\n\n";
+        echo '# ' . esc_html(get_bloginfo('name')) . ($is_full ? ' (Full Archive)' : '') . "\n";
+        echo '> ' . esc_html(get_bloginfo('description')) . "\n\n";
 
         if (!$is_full) {
             echo "## Discover\n";
-            echo '- [Full Archive](' . home_url('/llms-full.txt') . "): Complete index.\n\n";
+            echo '- [Full Archive](' . esc_url(home_url('/llms-full.txt')) . "): Complete index.\n\n";
             $limit      = max(1, (int) $opts['index_limit']);
             $extra      = isset($opts['llms_post_types']) ? (array) $opts['llms_post_types'] : array();
             $post_types = array_unique(array_merge(array('page'), $extra));
@@ -359,7 +354,7 @@ class Marklink {
             }
 
             $label = isset($type_objects[$post_type]) ? $type_objects[$post_type]->label : ucfirst($post_type);
-            echo '## ' . $label . "\n";
+            echo '## ' . esc_html($label) . "\n";
 
             while ($query->have_posts()) {
                 $query->the_post();
@@ -386,7 +381,7 @@ class Marklink {
                     $md_url = rtrim($permalink, '/') . '.md';
                 }
 
-                echo '- [' . $title . '](' . $md_url . ")\n";
+                echo '- [' . esc_html($title) . '](' . esc_url($md_url) . ")\n";
             }
 
             echo "\n";
@@ -401,19 +396,19 @@ class Marklink {
         $is_home_md = (bool) get_query_var('is_home');
         $md_slug    = get_query_var('md_slug');
 
-        if (!$is_md_url && preg_match('/^\/(home|index)\.md(\?.*)?$/i', $_SERVER['REQUEST_URI'])) {
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? esc_url_raw(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+
+        if (!$is_md_url && preg_match('/^\/(home|index)\.md(\?.*)?$/i', $request_uri)) {
             $is_home_md = true;
             $is_md_url  = true;
         }
-        if (!$is_md_url && preg_match('/^\/(.+)\.md(\?.*)?$/i', $_SERVER['REQUEST_URI'], $m)) {
+        if (!$is_md_url && preg_match('/^\/(.+)\.md(\?.*)?$/i', $request_uri, $m)) {
             $is_md_url = true;
             $md_slug   = $m[1];
         }
 
-        $is_md_header = (
-            isset($_SERVER['HTTP_ACCEPT'])
-            && strpos($_SERVER['HTTP_ACCEPT'], 'text/markdown') !== false
-        );
+        $http_accept = isset($_SERVER['HTTP_ACCEPT']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_ACCEPT'])) : '';
+        $is_md_header = (strpos($http_accept, 'text/markdown') !== false);
 
         if (!$is_md_url && !$is_md_header) {
             return;
@@ -464,6 +459,7 @@ class Marklink {
         header('Content-Type: text/markdown; charset=UTF-8');
         header('Vary: Accept');
 
+        // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Intentionally using core WP filter.
         $content = apply_filters('the_content', $post->post_content);
 
         $content = preg_replace('/<(script|style|noscript)\b[^>]*>(.*?)<\/\1>/is', '', $content);
@@ -497,7 +493,7 @@ class Marklink {
         );
         $markdown = preg_replace($search, $replace, $content);
 
-        $markdown = strip_tags($markdown);
+        $markdown = wp_strip_all_tags($markdown);
         $markdown = html_entity_decode($markdown, ENT_QUOTES, 'UTF-8');
         $markdown = str_replace(array("\t", "\r"), '', $markdown);
         $markdown = preg_replace("/\n{3,}/", "\n\n", $markdown);
@@ -506,9 +502,10 @@ class Marklink {
         $trimmed_lines = array_map('trim', $lines);
         $markdown = implode("\n", $trimmed_lines);
 
-        echo '# ' . get_the_title($post) . "\n";
-        echo 'URL: ' . get_permalink($post) . "\n";
+        echo '# ' . esc_html(get_the_title($post)) . "\n";
+        echo 'URL: ' . esc_url(get_permalink($post)) . "\n";
         echo "---------------------------\n\n";
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Already sanitized via wp_strip_all_tags() and html_entity_decode().
         echo trim($markdown);
 
         exit;

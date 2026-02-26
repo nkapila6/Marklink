@@ -79,6 +79,10 @@ Yes. You may want to exclude `.md` URLs and `/llms.txt` from your cache for real
 **Can I customize which posts are excluded?**
 Go to **Settings → Marklink** and edit the "Excluded words" field.
 
+## Plugin Check
+
+![Plugin Check](plugin-check.png)
+
 ## Changelog
 
 ### 0.0.1
