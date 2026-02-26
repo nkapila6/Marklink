@@ -40,6 +40,7 @@ dist/
 build/
 *.min.js.map
 *.min.css.map
+*.zip
 
 # Composer
 /vendor/
