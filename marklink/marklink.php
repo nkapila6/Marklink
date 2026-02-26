@@ -29,11 +29,13 @@ class Marklink {
     private $options = null;
 
     private static $defaults = array(
-        'excluded_words'  => 'copy, sample',
-        'index_limit'     => 20,
-        'post_types'      => array('post', 'page'),
-        'enable_md'       => 1,
-        'enable_llms_txt' => 1,
+        'enable_md'             => 1,
+        'enable_llms_txt'       => 1,
+        'index_limit'           => 20,
+        'excluded_words'        => 'copy, sample',
+        'llms_post_types'       => array('post'),
+        'llms_full_post_types'  => array('post'),
+        'md_post_types'         => array('post', 'page'),
     );
 
     public static function get_instance() {
@@ -74,6 +76,22 @@ class Marklink {
         flush_rewrite_rules();
     }
 
+    /**
+     * Get the clean request path relative to the site root,
+     * stripping query strings and the WordPress subdirectory prefix.
+     */
+    private function get_request_path() {
+        $uri  = wp_unslash($_SERVER['REQUEST_URI']);
+        $path = parse_url($uri, PHP_URL_PATH);
+
+        $home_path = trim(parse_url(home_url(), PHP_URL_PATH) ?: '', '/');
+        if ($home_path !== '') {
+            $path = preg_replace('#^/' . preg_quote($home_path, '#') . '#', '', $path);
+        }
+
+        return $path;
+    }
+
     // -------------------------------------------------------------------------
     // Settings page
     // -------------------------------------------------------------------------
@@ -101,26 +119,54 @@ class Marklink {
             'default'           => self::$defaults,
         ));
 
-        add_settings_section(
-            'marklink_general',
-            'General',
-            null,
-            'marklink'
-        );
+        // -- General ----------------------------------------------------------
+        add_settings_section('marklink_general', 'General', null, 'marklink');
 
-        add_settings_field('enable_md', 'Markdown endpoints (.md)', array($this, 'render_checkbox_field'), 'marklink', 'marklink_general', array('field' => 'enable_md', 'label' => 'Enable <code>.md</code> URLs for posts and pages'));
-        add_settings_field('enable_llms_txt', 'Site indexes', array($this, 'render_checkbox_field'), 'marklink', 'marklink_general', array('field' => 'enable_llms_txt', 'label' => 'Enable <code>/llms.txt</code> and <code>/llms-full.txt</code>'));
+        add_settings_field('enable_md', 'Markdown endpoints (.md)', array($this, 'render_checkbox_field'), 'marklink', 'marklink_general', array(
+            'field' => 'enable_md',
+            'label' => 'Enable <code>.md</code> URLs for posts and pages',
+        ));
+        add_settings_field('enable_llms_txt', 'Site indexes', array($this, 'render_checkbox_field'), 'marklink', 'marklink_general', array(
+            'field' => 'enable_llms_txt',
+            'label' => 'Enable <code>/llms.txt</code> and <code>/llms-full.txt</code>',
+        ));
+        add_settings_field('excluded_words', 'Excluded words', array($this, 'render_text_field'), 'marklink', 'marklink_general', array(
+            'field'       => 'excluded_words',
+            'description' => 'Comma-separated. Posts with these words in the title or slug are excluded from all indexes.',
+        ));
 
-        add_settings_section(
-            'marklink_index',
-            'Index Settings',
-            null,
-            'marklink'
-        );
+        // -- llms.txt ---------------------------------------------------------
+        add_settings_section('marklink_llms', '/llms.txt', array($this, 'render_llms_section_description'), 'marklink');
 
-        add_settings_field('index_limit', 'Posts in /llms.txt', array($this, 'render_number_field'), 'marklink', 'marklink_index', array('field' => 'index_limit'));
-        add_settings_field('excluded_words', 'Excluded words', array($this, 'render_text_field'), 'marklink', 'marklink_index', array('field' => 'excluded_words', 'description' => 'Comma-separated. Posts with these words in the title or slug are excluded from indexes.'));
-        add_settings_field('post_types', 'Post types', array($this, 'render_post_types_field'), 'marklink', 'marklink_index', array('field' => 'post_types'));
+        add_settings_field('index_limit', 'Number of items', array($this, 'render_number_field'), 'marklink', 'marklink_llms', array(
+            'field' => 'index_limit',
+        ));
+        add_settings_field('llms_post_types', 'Include in index', array($this, 'render_post_types_field'), 'marklink', 'marklink_llms', array(
+            'field' => 'llms_post_types',
+        ));
+
+        // -- llms-full.txt ----------------------------------------------------
+        add_settings_section('marklink_llms_full', '/llms-full.txt', array($this, 'render_llms_full_section_description'), 'marklink');
+
+        add_settings_field('llms_full_post_types', 'Include in full archive', array($this, 'render_post_types_field'), 'marklink', 'marklink_llms_full', array(
+            'field' => 'llms_full_post_types',
+        ));
+
+        // -- .md endpoints ----------------------------------------------------
+        add_settings_section('marklink_md', '.md Endpoints', null, 'marklink');
+
+        add_settings_field('md_post_types', 'Serve .md for these types', array($this, 'render_post_types_field'), 'marklink', 'marklink_md', array(
+            'field'      => 'md_post_types',
+            'force_page' => false,
+        ));
+    }
+
+    public function render_llms_section_description() {
+        echo '<p>The recent-posts index. Pages are always included.</p>';
+    }
+
+    public function render_llms_full_section_description() {
+        echo '<p>The complete archive. Pages are always included.</p>';
     }
 
     public function sanitize_settings($input) {
@@ -130,19 +176,21 @@ class Marklink {
         $clean['index_limit']     = isset($input['index_limit']) ? absint($input['index_limit']) : 20;
         $clean['excluded_words']  = isset($input['excluded_words']) ? sanitize_text_field($input['excluded_words']) : '';
 
-        if (!empty($input['post_types']) && is_array($input['post_types'])) {
-            $clean['post_types'] = array_map('sanitize_key', $input['post_types']);
-        } else {
-            $clean['post_types'] = array('post', 'page');
+        foreach (array('llms_post_types', 'llms_full_post_types', 'md_post_types') as $key) {
+            if (!empty($input[$key]) && is_array($input[$key])) {
+                $clean[$key] = array_map('sanitize_key', $input[$key]);
+            } else {
+                $clean[$key] = array();
+            }
         }
 
         return $clean;
     }
 
     public function render_checkbox_field($args) {
-        $opts  = $this->get_options();
-        $val   = !empty($opts[$args['field']]) ? 1 : 0;
-        $name  = 'marklink_settings[' . $args['field'] . ']';
+        $opts = $this->get_options();
+        $val  = !empty($opts[$args['field']]) ? 1 : 0;
+        $name = 'marklink_settings[' . $args['field'] . ']';
         echo '<label><input type="checkbox" name="' . esc_attr($name) . '" value="1" ' . checked(1, $val, false) . ' /> ' . wp_kses($args['label'], array('code' => array())) . '</label>';
     }
 
@@ -150,7 +198,7 @@ class Marklink {
         $opts = $this->get_options();
         $val  = isset($opts[$args['field']]) ? absint($opts[$args['field']]) : 20;
         $name = 'marklink_settings[' . $args['field'] . ']';
-        echo '<input type="number" name="' . esc_attr($name) . '" value="' . esc_attr($val) . '" min="1" max="200" class="small-text" />';
+        echo '<input type="number" name="' . esc_attr($name) . '" value="' . esc_attr($val) . '" min="1" max="500" class="small-text" />';
     }
 
     public function render_text_field($args) {
@@ -164,16 +212,35 @@ class Marklink {
     }
 
     public function render_post_types_field($args) {
-        $opts     = $this->get_options();
-        $selected = isset($opts['post_types']) ? (array) $opts['post_types'] : array('post', 'page');
-        $types    = get_post_types(array('public' => true), 'objects');
+        $opts      = $this->get_options();
+        $field     = $args['field'];
+        $selected  = isset($opts[$field]) ? (array) $opts[$field] : array();
+        $types     = get_post_types(array('public' => true), 'objects');
+        $force_page = isset($args['force_page']) ? $args['force_page'] : true;
 
         foreach ($types as $type) {
             if ($type->name === 'attachment') {
                 continue;
             }
-            $chk = in_array($type->name, $selected, true) ? ' checked' : '';
-            echo '<label style="display:block;margin-bottom:4px;"><input type="checkbox" name="marklink_settings[post_types][]" value="' . esc_attr($type->name) . '"' . $chk . ' /> ' . esc_html($type->label) . '</label>';
+
+            $is_page     = ($type->name === 'page');
+            $is_locked   = $force_page && $is_page;
+            $is_checked  = $is_locked || in_array($type->name, $selected, true);
+
+            echo '<label style="display:block;margin-bottom:4px;">';
+            echo '<input type="checkbox" name="marklink_settings[' . esc_attr($field) . '][]" value="' . esc_attr($type->name) . '"';
+            if ($is_checked) {
+                echo ' checked';
+            }
+            if ($is_locked) {
+                echo ' disabled';
+            }
+            echo ' /> ' . esc_html($type->label);
+            if ($is_locked) {
+                echo ' <span class="description">(always included)</span>';
+                echo '<input type="hidden" name="marklink_settings[' . esc_attr($field) . '][]" value="page" />';
+            }
+            echo '</label>';
         }
     }
 
@@ -247,14 +314,14 @@ class Marklink {
     }
 
     public function handle_llms_request() {
-        $uri = wp_unslash($_SERVER['REQUEST_URI']);
+        $path = $this->get_request_path();
 
-        if ($uri !== '/llms.txt' && $uri !== '/llms-full.txt') {
+        if ($path !== '/llms.txt' && $path !== '/llms-full.txt') {
             return;
         }
 
         $opts    = $this->get_options();
-        $is_full = ($uri === '/llms-full.txt');
+        $is_full = ($path === '/llms-full.txt');
 
         header('Content-Type: text/plain; charset=UTF-8');
 
@@ -264,25 +331,36 @@ class Marklink {
         if (!$is_full) {
             echo "## Discover\n";
             echo '- [Full Archive](' . home_url('/llms-full.txt') . "): Complete index.\n\n";
-            $limit = (int) $opts['index_limit'];
+            $limit      = max(1, (int) $opts['index_limit']);
+            $extra      = isset($opts['llms_post_types']) ? (array) $opts['llms_post_types'] : array();
+            $post_types = array_unique(array_merge(array('page'), $extra));
         } else {
-            $limit = -1;
+            $limit      = -1;
+            $extra      = isset($opts['llms_full_post_types']) ? (array) $opts['llms_full_post_types'] : array();
+            $post_types = array_unique(array_merge(array('page'), $extra));
         }
 
-        $post_types = !empty($opts['post_types']) ? $opts['post_types'] : array('post', 'page');
+        $forbidden  = array_filter(array_map('trim', explode(',', $opts['excluded_words'])));
+        $home_url   = trailingslashit(home_url());
+        $type_objects = get_post_types(array('public' => true), 'objects');
 
-        $query = new WP_Query(array(
-            'post_type'      => $post_types,
-            'posts_per_page' => $limit,
-            'post_status'    => 'publish',
-            'orderby'        => 'date',
-            'order'          => 'DESC',
-        ));
+        foreach ($post_types as $post_type) {
+            $query = new WP_Query(array(
+                'post_type'      => $post_type,
+                'posts_per_page' => $limit,
+                'post_status'    => 'publish',
+                'orderby'        => 'date',
+                'order'          => 'DESC',
+            ));
 
-        $forbidden = array_filter(array_map('trim', explode(',', $opts['excluded_words'])));
+            if (!$query->have_posts()) {
+                wp_reset_postdata();
+                continue;
+            }
 
-        echo "## Content Index\n";
-        if ($query->have_posts()) {
+            $label = isset($type_objects[$post_type]) ? $type_objects[$post_type]->label : ucfirst($post_type);
+            echo '## ' . $label . "\n";
+
             while ($query->have_posts()) {
                 $query->the_post();
 
@@ -291,7 +369,7 @@ class Marklink {
 
                 $should_exclude = false;
                 foreach ($forbidden as $word) {
-                    if (stripos($title, $word) !== false || stripos($slug, $word) !== false) {
+                    if ($word !== '' && (stripos($title, $word) !== false || stripos($slug, $word) !== false)) {
                         $should_exclude = true;
                         break;
                     }
@@ -301,7 +379,6 @@ class Marklink {
                 }
 
                 $permalink = get_permalink();
-                $home_url  = trailingslashit(home_url());
 
                 if ($permalink === $home_url || $permalink === untrailingslashit($home_url)) {
                     $md_url = home_url('/index.md');
@@ -311,8 +388,11 @@ class Marklink {
 
                 echo '- [' . $title . '](' . $md_url . ")\n";
             }
+
+            echo "\n";
+            wp_reset_postdata();
         }
-        wp_reset_postdata();
+
         exit;
     }
 
@@ -364,7 +444,7 @@ class Marklink {
 
         } elseif ($md_slug) {
             $opts       = $this->get_options();
-            $post_types = !empty($opts['post_types']) ? $opts['post_types'] : array('post', 'page');
+            $post_types = !empty($opts['md_post_types']) ? (array) $opts['md_post_types'] : array('post', 'page');
 
             foreach ($post_types as $type) {
                 $post = get_page_by_path($md_slug, OBJECT, $type);
