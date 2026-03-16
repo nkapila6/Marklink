@@ -505,8 +505,7 @@ class Marklink {
         echo '# ' . esc_html(get_the_title($post)) . "\n";
         echo 'URL: ' . esc_url(get_permalink($post)) . "\n";
         echo "---------------------------\n\n";
-        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Already sanitized via wp_strip_all_tags() and html_entity_decode().
-        echo trim($markdown);
+        echo esc_html( trim( $markdown ) );
 
         exit;
     }
